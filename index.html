@@ -1,0 +1,115 @@
+<html>
+<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+<meta content="utf-8" http-equiv="encoding">
+<link rel="stylesheet" href="https://unpkg.com/papercss@1.8.2/dist/paper.min.css">
+<script src="https://sdk.amazonaws.com/js/aws-sdk-2.1.14.min.js"></script>
+<h2 id="hdr">Alternator traces</h2>
+<h3>Tracing
+</h3>
+<input type="text" id="tracing_filter" placeholder="Filter"/>
+<div class="paper container-lg" style="overflow:scroll; height:40%;">
+<table id="tracing_table" class="table-alternating">
+</table>
+</div>
+<br/>
+<h3>Slow query log</h3>
+<input type="text" id="slow_filter" placeholder="Filter"/>
+<div class="paper container-lg" style="overflow:scroll; height:40%;">
+<table id="slow_log_table" class="table-alternating">
+</table>
+</div>
+<script>
+  function getTime(uuid_str) {
+    var uuid_arr = uuid_str.split('-'),
+    time_str = [
+      uuid_arr[2].substring(1),
+      uuid_arr[1],
+      uuid_arr[0]
+    ].join('');
+    return parseInt(time_str, 16);
+  };
+
+  function generateTable(table, columns, data, separator_col, filter) {
+    var last_value = "";
+    for (let element of data) {
+      if (!JSON.stringify(element).includes(filter)) {
+        continue;
+      }
+      if (separator_col && last_value != element[separator_col]["S"]) {
+        let separator_row = table.insertRow();
+        separator_row.insertCell().appendChild(document.createTextNode("----"));
+        last_value = element[separator_col]["S"];
+      }
+      let row = table.insertRow();
+      for (col of columns) {
+        let text_raw = element[col]["S"];
+        let text = document.createTextNode(text_raw);
+        row.insertCell().appendChild(text);
+      }
+    }
+  }
+
+  function generateTHead(table, columns) {
+    let thead = table.createTHead();
+    let row = thead.insertRow();
+    for (let key of columns) {
+      let th = document.createElement("th");
+      th.appendChild(document.createTextNode(key));
+      row.appendChild(th);
+    }
+  }
+
+  var query_dict = {}
+  location.search.substr(1).split("&").forEach(function(item) {query_dict[item.split("=")[0]] = item.split("=")[1]})  
+
+  var dynamodb = new AWS.DynamoDB({
+    accessKeyId:    query_dict['user']        || 'alternator',
+    secretAccessKey:query_dict['pass']        || 'secret_pass',
+    region:         query_dict['region']      || 'us-east-1',
+    endpoint:       query_dict['endpoint']    || 'http://localhost:8000',
+    sslEnabled:     query_dict['ssl']         || false,
+    maxRetries:     query_dict['max_retries'] || 5,
+  });
+
+  document.getElementById("hdr").innerHTML += " for " + dynamodb.endpoint.protocol + "://" + dynamodb.endpoint.host
+
+  reload_slow_log = function() {
+    var params = {
+      TableName: '.scylla.alternator.system_traces.node_slow_log'
+    }
+    dynamodb.scan(params, function(err, data) {
+      if (err) {
+          document.getElementById("slow_log_table").innerHTML = "Failed to fetch data: " + err;
+          return
+      }
+      let table = document.getElementById("slow_log_table");
+      let columns = ["node_ip", "source_ip", "date", "duration", "shard", "username", "command", "parameters", "start_time"];
+      table.innerHTML = "";
+      generateTHead(table, columns);
+      generateTable(table, columns, data.Items, null, document.getElementById("slow_filter").value);
+    });
+  }
+  reload_tracing = function() {
+    var params = {
+      TableName: '.scylla.alternator.system_traces.events'
+    }
+    dynamodb.scan(params, function(err, data) {
+      if (err) {
+          document.getElementById("tracing_table").innerHTML = "Failed to fetch data: " + err;
+          return
+      }
+      let table = document.getElementById("tracing_table");
+      let columns = ["session_id", "event_id", "activity", "scylla_parent_id", "scylla_span_id", "source", "source_elapsed", "thread"];
+      table.innerHTML = "";
+      generateTHead(table, columns);
+        console.log(document.getElementById("tracing_filter").textContent)
+      generateTable(table, columns, data.Items, "session_id", document.getElementById("tracing_filter").value);
+    });
+  }
+
+  reload_tracing();
+  reload_slow_log();
+  document.getElementById("tracing_filter").addEventListener('input', (event) => { reload_tracing() })
+  document.getElementById("slow_filter").addEventListener('input', (event) => { reload_slow_log() })
+</script>
+</html>
